@@ -17,7 +17,12 @@ describe("ResourceService", () => {
     return tmpDir;
   }
 
-  function writeLegacySessionFileSidecar({ fileId = "sf_legacy", status = "available", fileExists = true } = {}) {
+  function writeLegacySessionFileSidecar({
+    fileId = "sf_legacy",
+    status = "available",
+    fileExists = true,
+    missingAt = null,
+  } = {}) {
     const root = makeTmpDir();
     const agentsDir = path.join(root, "agents");
     const sessionPath = path.join(agentsDir, "hana", "sessions", "legacy.jsonl");
@@ -49,7 +54,7 @@ describe("ResourceService", () => {
           mtimeMs: 222,
           storageKind: "external",
           status,
-          missingAt: status === "expired" ? 333 : null,
+          missingAt: missingAt ?? (status === "expired" ? 333 : null),
         },
       },
       refs: [
@@ -103,6 +108,50 @@ describe("ResourceService", () => {
       mime: "text/plain",
       size: 13,
       filename: "note.txt",
+    });
+  });
+
+  it("marks available legacy resources as missing when tracked content no longer exists", async () => {
+    const { ResourceService } = await import("../core/resource-service.js");
+    const { agentsDir } = writeLegacySessionFileSidecar({
+      fileId: "sf_missing",
+      status: "available",
+      fileExists: false,
+    });
+    const service = makeService(ResourceService, agentsDir);
+
+    const resource = service.getResource("res_sf_missing");
+
+    expect(resource).toMatchObject({
+      resourceId: "res_sf_missing",
+      lifecycle: { status: "missing" },
+      links: {
+        self: "/api/resources/res_sf_missing",
+      },
+    });
+    expect(resource.lifecycle.missingAt).toEqual(expect.any(Number));
+    expect(resource.links.content).toBeUndefined();
+  });
+
+  it("restores missing legacy resources as available when tracked content exists again", async () => {
+    const { ResourceService } = await import("../core/resource-service.js");
+    const { agentsDir } = writeLegacySessionFileSidecar({
+      fileId: "sf_returned",
+      status: "missing",
+      fileExists: true,
+      missingAt: 444,
+    });
+    const service = makeService(ResourceService, agentsDir);
+
+    const resource = service.getResource("res_sf_returned");
+
+    expect(resource).toMatchObject({
+      resourceId: "res_sf_returned",
+      lifecycle: { status: "available", missingAt: null },
+      links: {
+        self: "/api/resources/res_sf_returned",
+        content: "/api/resources/res_sf_returned/content",
+      },
     });
   });
 

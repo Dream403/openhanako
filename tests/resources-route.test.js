@@ -19,6 +19,40 @@ describe("resources route", () => {
     return filePath;
   }
 
+  function makeMissingSessionFileSidecar({ fileId = "sf_route_missing" } = {}) {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hana-resources-route-"));
+    const agentsDir = path.join(tmpDir, "agents");
+    const sessionPath = path.join(agentsDir, "hana", "sessions", "main.jsonl");
+    const filePath = path.join(tmpDir, "workspace", "missing.txt");
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, "{}\n", "utf-8");
+    fs.writeFileSync(`${sessionPath}.files.json`, JSON.stringify({
+      version: 1,
+      sessionPath,
+      files: {
+        [fileId]: {
+          id: fileId,
+          sessionPath,
+          filePath,
+          realPath: filePath,
+          displayName: "Missing",
+          filename: "missing.txt",
+          mime: "text/plain",
+          size: 12,
+          kind: "document",
+          isDirectory: false,
+          storageKind: "external",
+          status: "available",
+          missingAt: null,
+        },
+      },
+      refs: [],
+      createdAt: 1,
+      updatedAt: 1,
+    }), "utf-8");
+    return { agentsDir, fileId };
+  }
+
   it("returns resource metadata from the engine resource service", async () => {
     const { createResourcesRoute } = await import("../server/routes/resources.js");
     const app = new Hono();
@@ -120,6 +154,40 @@ describe("resources route", () => {
     expect(await res.json()).toEqual({
       error: "resource_error",
       detail: "identity context not initialized",
+    });
+  });
+
+  it("returns reconciled missing metadata through the real resource service", async () => {
+    const { createResourcesRoute } = await import("../server/routes/resources.js");
+    const { ResourceService } = await import("../core/resource-service.js");
+    const { SessionFileRegistry } = await import("../lib/session-files/session-file-registry.js");
+    const { agentsDir, fileId } = makeMissingSessionFileSidecar();
+    const service = new ResourceService({
+      agentsDir,
+      sessionFiles: new SessionFileRegistry(),
+      runtimeContext: { studioId: "studio_route" },
+      now: () => 999,
+    });
+    const app = new Hono();
+    app.route("/api", createResourcesRoute({
+      getRuntimeContext: () => ({
+        serverId: "server_route",
+        userId: "user_route",
+        studioId: "studio_route",
+        connectionKind: "local",
+        credentialKind: "loopback_token",
+      }),
+      resources: service,
+    }));
+
+    const res = await app.request(`/api/resources/res_${fileId}`);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      resourceId: `res_${fileId}`,
+      studioId: "studio_route",
+      lifecycle: { status: "missing", missingAt: 999 },
+      links: { self: `/api/resources/res_${fileId}` },
     });
   });
 

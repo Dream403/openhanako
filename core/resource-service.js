@@ -15,24 +15,25 @@ export class ResourceError extends Error {
 }
 
 export class ResourceService {
-  constructor({ agentsDir, sessionFiles, runtimeContext } = {}) {
+  constructor({ agentsDir, sessionFiles, runtimeContext, now = () => Date.now() } = {}) {
     if (!agentsDir) throw new Error("agentsDir is required for ResourceService");
     if (!sessionFiles) throw new Error("sessionFiles is required for ResourceService");
     if (!runtimeContext?.studioId) throw new Error("runtimeContext.studioId is required for ResourceService");
     this._agentsDir = agentsDir;
     this._sessionFiles = sessionFiles;
     this._runtimeContext = runtimeContext;
+    this._now = now;
     this._sessionPathByFileId = new Map();
   }
 
   getResource(resourceId) {
-    const file = this._findSessionFileByResourceId(resourceId);
+    const file = this._reconcileFileAvailability(this._findSessionFileByResourceId(resourceId));
     if (!file) return null;
     return createSessionFileResourceEnvelope(file, { studioId: this._runtimeContext.studioId });
   }
 
   resolveContent(resourceId) {
-    const file = this._findSessionFileByResourceId(resourceId);
+    const file = this._reconcileFileAvailability(this._findSessionFileByResourceId(resourceId));
     if (!file) {
       throw new ResourceError("resource not found", {
         status: 404,
@@ -113,6 +114,49 @@ export class ResourceService {
     const sessionPath = this._findSessionPathForFileId(fileId);
     if (!sessionPath) return null;
     return this._sessionFiles.get(fileId, { sessionPath });
+  }
+
+  _reconcileFileAvailability(file) {
+    if (!file || file.status === "expired") return file;
+
+    const sourcePath = file.realPath || file.filePath;
+    if (!sourcePath || !path.isAbsolute(sourcePath)) return file;
+
+    let realPath;
+    let stat;
+    try {
+      realPath = fs.realpathSync(sourcePath);
+      stat = fs.statSync(realPath);
+    } catch {
+      return {
+        ...file,
+        status: "missing",
+        missingAt: file.missingAt ?? this._now(),
+      };
+    }
+
+    const size = stat.isDirectory() ? null : stat.size;
+    const isDirectory = stat.isDirectory();
+    if (
+      file.status === "available"
+      && file.realPath === realPath
+      && file.mtimeMs === stat.mtimeMs
+      && file.size === size
+      && file.isDirectory === isDirectory
+      && file.missingAt == null
+    ) {
+      return file;
+    }
+
+    return {
+      ...file,
+      realPath,
+      status: "available",
+      missingAt: null,
+      mtimeMs: stat.mtimeMs,
+      size,
+      isDirectory,
+    };
   }
 
   _findSessionPathForFileId(fileId) {
