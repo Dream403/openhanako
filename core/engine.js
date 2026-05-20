@@ -1261,7 +1261,7 @@ export class HanaEngine {
       if (this._pluginManager) {
         for (const p of this._pluginManager.listPlugins()) {
           if (p.status === "loaded") {
-            await this._pluginManager.unloadPlugin(p.id);
+            await this._pluginManager.unloadPlugin(p.id, { pluginKey: p.pluginKey });
           }
         }
       }
